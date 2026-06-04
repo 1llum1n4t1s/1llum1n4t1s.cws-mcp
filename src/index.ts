@@ -660,22 +660,22 @@ server.registerTool(
         }
 
         if (title?.trim()) {
-          await fillTextFieldByLabel(page, ["Title", "제목", "Name", "이름"], title.trim());
+          await fillTextFieldByLabel(page, ["Title", "제목", "Name", "이름", "タイトル", "名前", "拡張機能の名前"], title.trim());
         }
         if (summary?.trim()) {
-          await fillTextFieldByLabel(page, ["Summary", "Short description", "요약", "짧은 설명"], summary.trim());
+          await fillTextFieldByLabel(page, ["Summary", "Short description", "요약", "짧은 설명", "概要", "要約", "短い説明", "簡単な説明"], summary.trim());
         }
         if (description?.trim()) {
-          await fillTextFieldByLabel(page, ["Description", "설명"], description.trim());
+          await fillTextFieldByLabel(page, ["Description", "설명", "詳細な説明", "説明"], description.trim());
         }
         if (homepageUrl?.trim()) {
-          await fillTextFieldByLabel(page, ["Homepage", "홈페이지"], homepageUrl.trim());
+          await fillTextFieldByLabel(page, ["Homepage", "홈페이지", "ホームページ", "ウェブサイト", "公式サイト"], homepageUrl.trim());
         }
         if (supportUrl?.trim()) {
-          await fillTextFieldByLabel(page, ["Support", "지원", "Help", "도움말"], supportUrl.trim());
+          await fillTextFieldByLabel(page, ["Support", "지원", "Help", "도움말", "サポート", "ヘルプ", "サポート URL", "問い合わせ"], supportUrl.trim());
         }
         if (storeIconPath?.trim()) {
-          await uploadFileBySectionLabel(page, ["Store icon", "스토어 아이콘", "아이콘", "Icon"], storeIconPath.trim());
+          await uploadFileBySectionLabel(page, ["Store icon", "스토어 아이콘", "아이콘", "Icon", "ストア アイコン", "ストアアイコン", "アイコン"], storeIconPath.trim());
         }
 
         if (category?.trim()) {
