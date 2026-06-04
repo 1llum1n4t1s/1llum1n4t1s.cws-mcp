@@ -1,8 +1,8 @@
 {
-  "name": "cws-mcp",
+  "name": "@1llum1n4t1/cws-mcp",
   "version": "1.4.2",
-  "mcpName": "io.github.mikusnuz/cws",
-  "description": "MCP server for Chrome Web Store extension management",
+  "mcpName": "io.github.1llum1n4t1s/cws",
+  "description": "MCP server for Chrome Web Store extension management (V2 API)",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -14,7 +14,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc",
@@ -28,19 +28,25 @@
     "publish",
     "model-context-protocol"
   ],
-  "author": "mikusnuz",
+  "author": "1llum1n4t1s",
+  "contributors": [
+    "mikusnuz (original author of cws-mcp)"
+  ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mikusnuz/cws-mcp.git"
+    "url": "git+https://github.com/1llum1n4t1s/1llum1n4t1s.cws-mcp.git"
   },
-  "homepage": "https://github.com/mikusnuz/cws-mcp#readme",
+  "homepage": "https://github.com/1llum1n4t1s/1llum1n4t1s.cws-mcp#readme",
   "bugs": {
-    "url": "https://github.com/mikusnuz/cws-mcp/issues"
+    "url": "https://github.com/1llum1n4t1s/1llum1n4t1s.cws-mcp/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "playwright": "^1.58.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "playwright": "^1.60.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

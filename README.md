@@ -1,12 +1,12 @@
-# cws-mcp
+# @1llum1n4t1/cws-mcp
 
-[![npm version](https://img.shields.io/npm/v/cws-mcp)](https://www.npmjs.com/package/cws-mcp)
+[![npm version](https://img.shields.io/npm/v/@1llum1n4t1/cws-mcp)](https://www.npmjs.com/package/@1llum1n4t1/cws-mcp)
 
 [한국어](README.ko.md)
 
-[![MCP Badge](https://lobehub.com/badge/mcp/mikusnuz-cws-mcp)](https://lobehub.com/mcp/mikusnuz-cws-mcp)
-
 MCP server for Chrome Web Store extension management. Upload, publish, and manage Chrome extensions directly from Claude Code or any MCP client.
+
+> Fork of [mikusnuz/cws-mcp](https://github.com/mikusnuz/cws-mcp), updated for the Chrome Web Store **API V2**: service-account auth, a working OAuth flow (Google removed the old `oob` flow), and the latest MCP SDK.
 
 ## When to Use
 
@@ -48,32 +48,64 @@ Additionally, v1.1 API endpoints are available for metadata operations (`get`, `
 
 ## Setup
 
-### 1. Create OAuth2 Credentials
+Authenticate with **either** a service account (recommended, ideal for CI/CD) **or** an OAuth2 refresh token.
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a project (or select existing)
-3. Enable **Chrome Web Store API**
-4. Create OAuth2 credentials (Desktop app type)
-5. Note your **Client ID** and **Client Secret**
+### Option A — Service Account (recommended)
 
-### 2. Get Refresh Token
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create/select a project and enable the **Chrome Web Store API**.
+2. Create a **Service Account**, then add a **JSON key** (Keys → Add key → Create new key → JSON).
+3. In the [Developer Dashboard](https://chrome.google.com/webstore/devconsole) → **Account**, add the service account's email to grant it API access to your publisher account.
+4. Set `CWS_SERVICE_ACCOUNT_KEY` to the **path of the JSON key file** (or its raw JSON contents).
 
-```bash
-# Open in browser to get authorization code
-open "https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&client_id=YOUR_CLIENT_ID&redirect_uri=urn:ietf:wg:oauth:2.0:oob"
+See [Use a service account with the Chrome Web Store API](https://developer.chrome.com/docs/webstore/service-accounts) for details.
 
-# Exchange code for refresh token
-curl -X POST https://oauth2.googleapis.com/token \
-  -d "client_id=YOUR_CLIENT_ID" \
-  -d "client_secret=YOUR_CLIENT_SECRET" \
-  -d "code=YOUR_AUTH_CODE" \
-  -d "grant_type=authorization_code" \
-  -d "redirect_uri=urn:ietf:wg:oauth:2.0:oob"
-```
+### Option B — OAuth2 Refresh Token
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create/select a project and enable the **Chrome Web Store API**.
+2. Create **OAuth2 credentials** of type **Desktop app**. Note the **Client ID** and **Client Secret**.
+3. Obtain a refresh token using a **loopback redirect**. (The old `urn:ietf:wg:oauth:2.0:oob` flow was removed by Google in 2022 and no longer works — desktop clients now use `http://localhost`.)
+
+   ```bash
+   # 1. Open this URL in a browser and grant access:
+   #    https://accounts.google.com/o/oauth2/v2/auth?response_type=code&access_type=offline&prompt=consent&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fchromewebstore&client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost:8080
+   #
+   # 2. The browser is redirected to http://localhost:8080/?code=AUTH_CODE&...
+   #    (no server needed — just copy the `code` value from the address bar).
+   #
+   # 3. Exchange the code for a refresh token:
+   curl -X POST https://oauth2.googleapis.com/token \
+     -d "client_id=YOUR_CLIENT_ID" \
+     -d "client_secret=YOUR_CLIENT_SECRET" \
+     -d "code=YOUR_AUTH_CODE" \
+     -d "grant_type=authorization_code" \
+     -d "redirect_uri=http://localhost:8080"
+   ```
+
+   The response contains your `refresh_token`. Any `http://localhost[:PORT]` or `http://127.0.0.1[:PORT]` redirect is accepted for Desktop-app clients.
 
 ### 3. Configure MCP
 
-Add to your Claude Code MCP settings (`~/.claude/settings.local.json`):
+Add to your Claude Code MCP settings (`~/.claude/settings.local.json`).
+
+**Via npm with a service account (recommended):**
+
+```json
+{
+  "mcpServers": {
+    "cws-mcp": {
+      "command": "npx",
+      "args": ["-y", "@1llum1n4t1/cws-mcp"],
+      "env": {
+        "CWS_SERVICE_ACCOUNT_KEY": "/path/to/service-account.json",
+        "CWS_PUBLISHER_ID": "me",
+        "CWS_ITEM_ID": "your-extension-id"
+      }
+    }
+  }
+}
+```
+
+**From a local clone with an OAuth refresh token:**
 
 ```json
 {
@@ -93,30 +125,19 @@ Add to your Claude Code MCP settings (`~/.claude/settings.local.json`):
 }
 ```
 
-Or install globally via npm:
-
-```json
-{
-  "mcpServers": {
-    "cws-mcp": {
-      "command": "npx",
-      "args": ["-y", "cws-mcp"],
-      "env": { ... }
-    }
-  }
-}
-```
-
 ## Environment Variables
+
+Provide **either** a service-account key (Auth A) **or** the OAuth2 refresh-token trio (Auth B).
 
 | Variable | Required | Description |
 |---|---|---|
-| `CWS_CLIENT_ID` | Yes | Google OAuth2 Client ID |
-| `CWS_CLIENT_SECRET` | Yes | Google OAuth2 Client Secret |
-| `CWS_REFRESH_TOKEN` | Yes | OAuth2 Refresh Token |
+| `CWS_SERVICE_ACCOUNT_KEY` | Auth A | Path to a service-account JSON key file, or the raw JSON string. Takes precedence over OAuth when set. |
+| `CWS_CLIENT_ID` | Auth B | Google OAuth2 Client ID |
+| `CWS_CLIENT_SECRET` | Auth B | Google OAuth2 Client Secret |
+| `CWS_REFRESH_TOKEN` | Auth B | OAuth2 Refresh Token |
 | `CWS_PUBLISHER_ID` | No | Publisher ID (default: `me`) |
 | `CWS_ITEM_ID` | No | Default extension item ID |
-| `CWS_DASHBOARD_PROFILE_DIR` | No | Browser profile path for UI automation (default: `~/.cws-mcp-profile`) |
+| `CWS_DASHBOARD_PROFILE_DIR` | No | Browser profile path for `update-metadata-ui` (default: `~/.cws-mcp-profile`) |
 
 ## Usage Examples
 

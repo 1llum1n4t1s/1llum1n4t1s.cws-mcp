@@ -1,39 +1,46 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.mikusnuz/cws",
+  "name": "io.github.1llum1n4t1s/cws",
   "description": "MCP server for Chrome Web Store — extension upload, publish, status, and rollout",
   "repository": {
-    "url": "https://github.com/mikusnuz/cws-mcp",
+    "url": "https://github.com/1llum1n4t1s/1llum1n4t1s.cws-mcp",
     "source": "github"
   },
-  "version": "1.4.1",
+  "version": "1.4.2",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "cws-mcp",
-      "version": "1.4.1",
+      "identifier": "@1llum1n4t1/cws-mcp",
+      "version": "1.4.2",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
+          "name": "CWS_SERVICE_ACCOUNT_KEY",
+          "description": "Service account JSON key (file path or raw JSON). Provide this OR the OAuth trio (CWS_CLIENT_ID/SECRET/REFRESH_TOKEN).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
           "name": "CWS_CLIENT_ID",
-          "description": "Google OAuth2 Client ID for Chrome Web Store API",
-          "isRequired": true,
+          "description": "Google OAuth2 Client ID (required when not using a service account)",
+          "isRequired": false,
           "format": "string",
           "isSecret": true
         },
         {
           "name": "CWS_CLIENT_SECRET",
-          "description": "Google OAuth2 Client Secret",
-          "isRequired": true,
+          "description": "Google OAuth2 Client Secret (required when not using a service account)",
+          "isRequired": false,
           "format": "string",
           "isSecret": true
         },
         {
           "name": "CWS_REFRESH_TOKEN",
-          "description": "OAuth2 Refresh Token",
-          "isRequired": true,
+          "description": "OAuth2 Refresh Token (required when not using a service account)",
+          "isRequired": false,
           "format": "string",
           "isSecret": true
         }
