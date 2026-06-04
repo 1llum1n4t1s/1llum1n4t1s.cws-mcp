@@ -1,0 +1,42 @@
+name: Publish to npm
+
+# Trusted Publishing (OIDC) — トークン不要・2FA不要・provenance 自動付与。
+# 事前に npmjs.com のパッケージ設定で Trusted Publisher を登録すること:
+#   Publisher = GitHub Actions / Org or user = 1llum1n4t1s
+#   Repository = 1llum1n4t1s.cws-mcp / Workflow = npm-publish.yml
+# 発火: バージョンタグ (v1.4.3 等) の push、または手動実行。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC トークン発行に必須
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted Publishing は npm >= 11.5.1 が必要 (Node 22 同梱版より新しい)
+      - name: Ensure recent npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Trusted Publisher 設定済みなら OIDC で認証され、provenance も自動付与される
+      - name: Publish
+        run: npm publish
