@@ -6,12 +6,12 @@
     "url": "https://github.com/1llum1n4t1s/1llum1n4t1s.cws-mcp",
     "source": "github"
   },
-  "version": "2.0.0",
+  "version": "2.0.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@1llum1n4t1/cws-mcp",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "transport": {
         "type": "stdio"
       },

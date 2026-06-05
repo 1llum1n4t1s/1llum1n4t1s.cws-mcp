@@ -1,6 +1,6 @@
 {
   "name": "@1llum1n4t1/cws-mcp",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "mcpName": "io.github.1llum1n4t1s/cws",
   "description": "MCP server for Chrome Web Store extension management (V2 API)",
   "type": "module",
