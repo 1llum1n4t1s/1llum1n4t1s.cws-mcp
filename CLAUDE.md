@@ -51,5 +51,5 @@ Everything lives in a single file: **`src/index.ts`** (~1000 lines). The logical
 
 ## Distribution
 
-- **npm** via GitHub Actions Trusted Publishing (OIDC, no token) in `.github/workflows/npm-publish.yml`, triggered by pushing a `release/**` branch (matches the convention used across the user's other projects).
+- **npm** via GitHub Actions in `.github/workflows/npm-publish.yml` (authenticated with the `NPM_TOKEN` repo secret = an npmjs.com automation token), triggered by pushing a `release/**` branch (matches the convention used across the user's other projects).
 - **Docker** (`Dockerfile`, multi-stage, `node:22-alpine`), **Smithery** (`smithery.yaml`), and the **MCP Registry** (`server.json`). `llms.txt` is the machine-readable summary. When the tool surface or auth options change, update README.md, README.ko.md, llms.txt, smithery.yaml, and server.json together.

@@ -1,9 +1,8 @@
 name: Publish to npm
 
-# Trusted Publishing (OIDC) — トークン不要・2FA不要・provenance 自動付与。
-# 事前に npmjs.com のパッケージ設定で Trusted Publisher を登録すること:
-#   Publisher = GitHub Actions / Org or user = 1llum1n4t1s
-#   Repository = 1llum1n4t1s.cws-mcp / Workflow = npm-publish.yml
+# npm publish — GitHub Secret の NPM_TOKEN (npmjs.com の Automation トークン) で認証する。
+# Secret 登録: リポジトリ Settings → Secrets and variables → Actions → NPM_TOKEN
+#   (gh CLI なら: gh secret set NPM_TOKEN < トークン)
 # 発火: release/x.y.z ブランチの push、または手動実行。
 
 on:
@@ -14,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # OIDC トークン発行に必須
 
 jobs:
   publish:
@@ -46,16 +44,14 @@ jobs:
           fi
           echo "Release branch and package.json agree on $PKG"
 
-      # Trusted Publishing は npm >= 11.5.1 が必要 (Node 22 同梱版より新しい)
-      - name: Ensure recent npm
-        run: npm install -g npm@latest
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build
         run: pnpm run build
 
-      # Trusted Publisher 設定済みなら OIDC で認証され、provenance も自動付与される
+      # NPM_TOKEN は setup-node が書いた .npmrc の _authToken に注入される
       - name: Publish
         run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
