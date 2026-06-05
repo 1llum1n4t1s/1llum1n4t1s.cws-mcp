@@ -35,6 +35,8 @@ const V1_SUNSET = "2026-10-15";
 // ── Auth: OAuth2 refresh token & service account (JWT bearer) ──
 
 let cachedToken: { access_token: string; expires_at: number } | null = null;
+/** 取得中のトークン Promise（single-flight 用。並行取得の多重発火を防ぐ）。 */
+let tokenInflight: Promise<string> | null = null;
 
 interface ServiceAccountKey {
   client_email: string;
@@ -98,6 +100,7 @@ async function fetchTokenViaServiceAccount(
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     throw new Error(`Service account token request failed (${res.status}): ${await res.text()}`);
@@ -118,6 +121,7 @@ async function fetchTokenViaRefreshToken(): Promise<{ access_token: string; expi
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     throw new Error(`Token refresh failed (${res.status}): ${await res.text()}`);
@@ -134,24 +138,48 @@ async function getAccessToken(): Promise<string> {
     return cachedToken.access_token;
   }
 
-  const sa = loadServiceAccount();
-  let data: { access_token: string; expires_in: number };
-  if (sa) {
-    data = await fetchTokenViaServiceAccount(sa);
-  } else if (CLIENT_ID && CLIENT_SECRET && REFRESH_TOKEN) {
-    data = await fetchTokenViaRefreshToken();
-  } else {
-    throw new Error(
-      "Missing credentials. Set CWS_SERVICE_ACCOUNT_KEY (service account), " +
-        "or CWS_CLIENT_ID + CWS_CLIENT_SECRET + CWS_REFRESH_TOKEN (OAuth refresh token).",
-    );
-  }
+  // 並行リクエストでトークンを多重取得しないよう、取得中は同じ Promise を共有する。
+  if (tokenInflight) return tokenInflight;
 
-  cachedToken = {
-    access_token: data.access_token,
-    expires_at: Date.now() + data.expires_in * 1000,
-  };
-  return cachedToken.access_token;
+  tokenInflight = (async () => {
+    const sa = loadServiceAccount();
+    let data: { access_token: string; expires_in: number };
+    if (sa) {
+      data = await fetchTokenViaServiceAccount(sa);
+    } else if (CLIENT_ID && CLIENT_SECRET && REFRESH_TOKEN) {
+      data = await fetchTokenViaRefreshToken();
+    } else {
+      throw new Error(
+        "Missing credentials. Set CWS_SERVICE_ACCOUNT_KEY (service account), " +
+          "or CWS_CLIENT_ID + CWS_CLIENT_SECRET + CWS_REFRESH_TOKEN (OAuth refresh token).",
+      );
+    }
+
+    // トークンエンドポイントの想定外レスポンス（access_token 欠落 / expires_in 非数）を
+    // そのままキャッシュすると Bearer undefined や expires_at=NaN を生むので明示的に弾く。
+    if (
+      typeof data.access_token !== "string" ||
+      !data.access_token ||
+      typeof data.expires_in !== "number" ||
+      !Number.isFinite(data.expires_in)
+    ) {
+      throw new Error(
+        "Token endpoint returned an unexpected response (missing access_token or expires_in).",
+      );
+    }
+
+    cachedToken = {
+      access_token: data.access_token,
+      expires_at: Date.now() + data.expires_in * 1000,
+    };
+    return cachedToken.access_token;
+  })();
+
+  try {
+    return await tokenInflight;
+  } finally {
+    tokenInflight = null;
+  }
 }
 
 // ── Helpers ──
@@ -165,16 +193,38 @@ function resolveItemId(itemId?: string): string {
   if (!id) {
     throw new Error("No item ID provided. Pass itemId parameter or set CWS_ITEM_ID env var.");
   }
-  return id;
+  // URL パスセグメントとして安全化（itemId 経由で verb/クエリをすり替えられないように）。
+  return encodeURIComponent(id);
 }
 
 function resolvePublisherId(publisherId?: string): string {
-  return publisherId || PUBLISHER_ID;
+  return encodeURIComponent(publisherId || PUBLISHER_ID);
+}
+
+/** v2 API のアイテム操作 URL を組み立てる（pub/id は呼び出し側で安全化済みの前提）。 */
+function itemUrl(pub: string, id: string, action: string): string {
+  return `${API_BASE}/v2/publishers/${pub}/items/${id}:${action}`;
+}
+
+/** publish / submit 共通の publish リクエストボディを組み立てる。 */
+function buildPublishBody(opts: {
+  publishType?: string;
+  deployPercentage?: number;
+  skipReview?: boolean;
+  blockOnWarnings?: boolean;
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (opts.publishType) body.publishType = opts.publishType;
+  if (opts.deployPercentage !== undefined) body.deployInfos = [{ deployPercentage: opts.deployPercentage }];
+  if (opts.skipReview !== undefined) body.skipReview = opts.skipReview;
+  if (opts.blockOnWarnings !== undefined) body.blockOnWarnings = opts.blockOnWarnings;
+  return body;
 }
 
 async function apiCall(
   url: string,
   options: RequestInit,
+  timeoutMs = 60_000,
 ): Promise<{ ok: boolean; status: number; body: string }> {
   const token = await getAccessToken();
   const headers: Record<string, string> = {
@@ -182,8 +232,11 @@ async function apiCall(
     ...((options.headers as Record<string, string>) || {}),
   };
 
-  const res = await fetch(url, { ...options, headers });
+  // タイムアウトが無いとネットワークストール時に stdio リクエストが無言ハングする。
+  const res = await fetch(url, { ...options, headers, signal: AbortSignal.timeout(timeoutMs) });
   const body = await res.text();
+  // 認証/認可エラー時はキャッシュした古いトークンを破棄し、次回の再取得で自己回復させる。
+  if (res.status === 401 || res.status === 403) cachedToken = null;
   return { ok: res.ok, status: res.status, body };
 }
 
@@ -301,6 +354,27 @@ const V1_NOTE =
   `⚠️ This tool uses the Chrome Web Store v1.1 API, which Google will remove after ${V1_SUNSET}. ` +
   `The v2 API has no metadata read/write endpoint — after the sunset, change the store listing in the Developer Dashboard.`;
 
+/**
+ * v1.1 API の sunset 後は API を叩く前に明示エラーを返す（404 の「item 不在」誤誘導を防ぐ）。
+ * sunset 前は null を返し通常フローへ進む。
+ */
+function v1SunsetGuard(): ToolResult | null {
+  if (Date.now() > Date.parse(`${V1_SUNSET}T00:00:00Z`)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `The Chrome Web Store v1.1 API was removed after ${V1_SUNSET}. ` +
+            `Change the store listing in the Developer Dashboard (the v2 API has no metadata read/write endpoint).`,
+        },
+      ],
+      isError: true,
+    };
+  }
+  return null;
+}
+
 function toolError(e: unknown): ToolResult {
   return { content: [{ type: "text", text: `Error: ${errMsg(e)}` }], isError: true };
 }
@@ -374,6 +448,10 @@ function summarizeStatus(raw: string): string | null {
   if (uniqReasons.length > 0) {
     lines.push("Issues:");
     for (const r of uniqReasons.slice(0, 20)) lines.push(`  - ${r}`);
+  } else {
+    // 拒否理由を自動抽出できなかった場合も「Issues なし＝承認」と誤読されないよう明示する。
+    // Google のレスポンス形状変更でキー名マッチが外れても、生レスポンスの確認へ誘導する。
+    lines.push("Issues: none auto-extracted — verify the raw status response for any rejection details.");
   }
 
   if (lines.length === 0) return null;
@@ -531,11 +609,15 @@ server.registerTool(
       const zipData = readFileSync(zipPath);
 
       const url = `${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`;
-      const result = await apiCall(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/zip" },
-        body: new Uint8Array(zipData),
-      });
+      const result = await apiCall(
+        url,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/zip" },
+          body: new Uint8Array(zipData),
+        },
+        180_000,
+      );
 
       return formatResponse(result);
     } catch (e) {
@@ -553,13 +635,9 @@ server.registerTool(
       const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
 
-      const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:publish`;
+      const url = itemUrl(pub, id, "publish");
 
-      const body: Record<string, unknown> = {};
-      if (publishType) body.publishType = publishType;
-      if (deployPercentage !== undefined) body.deployInfos = [{ deployPercentage }];
-      if (skipReview !== undefined) body.skipReview = skipReview;
-      if (blockOnWarnings !== undefined) body.blockOnWarnings = blockOnWarnings;
+      const body = buildPublishBody({ publishType, deployPercentage, skipReview, blockOnWarnings });
 
       const hasBody = Object.keys(body).length > 0;
       const result = await apiCall(url, {
@@ -585,7 +663,7 @@ server.registerTool(
       const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
 
-      const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`;
+      const url = itemUrl(pub, id, "fetchStatus");
       const result = await apiCall(url, { method: "GET" });
 
       const formatted = formatResponse(result);
@@ -609,7 +687,7 @@ server.registerTool(
       const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
 
-      const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:cancelSubmission`;
+      const url = itemUrl(pub, id, "cancelSubmission");
       const result = await apiCall(url, { method: "POST" });
 
       return formatResponse(result);
@@ -628,7 +706,7 @@ server.registerTool(
       const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
 
-      const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:setPublishedDeployPercentage`;
+      const url = itemUrl(pub, id, "setPublishedDeployPercentage");
       const result = await apiCall(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -648,6 +726,8 @@ server.registerTool(
   { description: descriptions.get, inputSchema: schemas.get },
   async ({ itemId, projection }) => {
     try {
+      const guard = v1SunsetGuard();
+      if (guard) return guard;
       const id = resolveItemId(itemId);
       const p = projection || "DRAFT";
       const url = `${V1_BASE}/items/${id}?projection=${encodeURIComponent(p)}`;
@@ -666,6 +746,8 @@ server.registerTool(
   { description: descriptions["update-metadata"], inputSchema: schemas["update-metadata"] },
   async ({ itemId, title, summary, description, category, defaultLocale, homepageUrl, supportUrl, metadata }) => {
     try {
+      const guard = v1SunsetGuard();
+      if (guard) return guard;
       const id = resolveItemId(itemId);
       const url = `${V1_BASE}/items/${id}`;
 
@@ -715,7 +797,7 @@ server.registerTool(
 
       // 1) Preflight: アイテム存在確認（アップロード前に 404 を検出する）。
       if (preflight !== false) {
-        const pre = await apiCall(`${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`, {
+        const pre = await apiCall(itemUrl(pub, id, "fetchStatus"), {
           method: "GET",
         });
         const preMissing =
@@ -738,11 +820,15 @@ server.registerTool(
       }
 
       // 2) Upload
-      const uploadRes = await apiCall(`${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/zip" },
-        body: new Uint8Array(zipData),
-      });
+      const uploadRes = await apiCall(
+        `${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/zip" },
+          body: new Uint8Array(zipData),
+        },
+        180_000,
+      );
       let uploadState: string | undefined;
       let uploadItemError: unknown;
       try {
@@ -753,12 +839,17 @@ server.registerTool(
         // non-JSON body — leave undefined
       }
       // upload は HTTP 200 でも uploadState=FAILURE / itemError で失敗していることがある。
-      // 一方 IN_PROGRESS / PROCESSING など SUCCESS 以外でも失敗とは限らないので、
-      // 明確な FAILURE か itemError のときだけ失敗扱いにする（誤って中断しない）。
+      // 「成功と確認できたときだけ次へ進む」方針: HTTP エラー・itemError（配列でもオブジェクトでも）・
+      // 既知の非 SUCCESS ステートは失敗扱いにし、壊れた版を黙って publish しない。
+      // ただし進行中（IN_PROGRESS / PROCESSING）と、ステート不明（非 JSON で HTTP 200）のときは中断しない。
+      const uploadPending = uploadState === "IN_PROGRESS" || uploadState === "PROCESSING";
+      const hasItemError =
+        uploadItemError != null &&
+        (!Array.isArray(uploadItemError) || uploadItemError.length > 0);
       const uploadFailed =
         !uploadRes.ok ||
-        uploadState === "FAILURE" ||
-        (Array.isArray(uploadItemError) && uploadItemError.length > 0);
+        hasItemError ||
+        (uploadState !== undefined && uploadState !== "SUCCESS" && !uploadPending);
       steps.push({
         step: "upload",
         ok: !uploadFailed,
@@ -780,13 +871,9 @@ server.registerTool(
       }
 
       // 3) Publish
-      const publishBody: Record<string, unknown> = {};
-      if (publishType) publishBody.publishType = publishType;
-      if (deployPercentage !== undefined) publishBody.deployInfos = [{ deployPercentage }];
-      if (skipReview !== undefined) publishBody.skipReview = skipReview;
-      if (blockOnWarnings !== undefined) publishBody.blockOnWarnings = blockOnWarnings;
+      const publishBody = buildPublishBody({ publishType, deployPercentage, skipReview, blockOnWarnings });
       const hasBody = Object.keys(publishBody).length > 0;
-      const publishRes = await apiCall(`${API_BASE}/v2/publishers/${pub}/items/${id}:publish`, {
+      const publishRes = await apiCall(itemUrl(pub, id, "publish"), {
         method: "POST",
         ...(hasBody
           ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(publishBody) }
@@ -801,7 +888,9 @@ server.registerTool(
               type: "text",
               text:
                 `Upload succeeded, but publish failed (HTTP ${publishRes.status}): ${publishRes.body}` +
-                (hint ? `\n\n${hint}` : ""),
+                (hint ? `\n\n${hint}` : "") +
+                "\n\nNote: the new ZIP is already uploaded as a draft — no need to re-upload. " +
+                "Retry with the 'publish' tool alone; re-running 'submit' would upload the ZIP again unnecessarily.",
             },
           ],
           isError: true,
@@ -809,7 +898,7 @@ server.registerTool(
       }
 
       // 4) Final status
-      const statusRes = await apiCall(`${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`, {
+      const statusRes = await apiCall(itemUrl(pub, id, "fetchStatus"), {
         method: "GET",
       });
       steps.push({ step: "status", ok: statusRes.ok, detail: `HTTP ${statusRes.status}` });
@@ -822,6 +911,8 @@ server.registerTool(
         ...steps.map((s) => `  ${s.ok ? "✓" : "✗"} ${s.step}${s.detail ? ` — ${s.detail}` : ""}`),
       ];
       if (summary) out.push("", summary);
+      // 要約のキー名マッチが外れても拒否理由を取りこぼさないよう、生 status も併記する。
+      if (statusRes.ok) out.push("", "Status response:", statusRes.body);
       out.push("", "Publish response:", publishRes.body);
       return { content: [{ type: "text", text: out.join("\n") }], isError: false };
     } catch (e) {
@@ -843,39 +934,33 @@ server.registerResource(
   },
   async (uri, variables) => {
     const extensionId = String(variables.extensionId);
+    const encId = encodeURIComponent(extensionId);
     try {
       const pub = resolvePublisherId();
-      const token = await getAccessToken();
 
-      // v2 status — the canonical source, must succeed.
-      const statusRes = await fetch(`${API_BASE}/v2/publishers/${pub}/items/${extensionId}:fetchStatus`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const statusText = await statusRes.text();
-      let statusData: unknown;
-      try {
-        statusData = JSON.parse(statusText);
-      } catch {
-        statusData = { raw: statusText };
-      }
+      // v2 status (canonical) と v1.1 metadata (optional) は独立なので並列取得。
+      // apiCall 経由でトークン付与・タイムアウト・401 無効化を tool 群と共有する。
+      const [statusRes, metaRes] = await Promise.all([
+        apiCall(itemUrl(pub, encId, "fetchStatus"), { method: "GET" }),
+        apiCall(`${V1_BASE}/items/${encId}?projection=PUBLISHED`, { method: "GET" }).catch(
+          (e): { ok: boolean; status: number; body: string } => ({ ok: false, status: 0, body: errMsg(e) }),
+        ),
+      ]);
 
-      // v1.1 metadata — optional, gracefully degrades once the v1.1 API is sunset.
-      let metaData: unknown;
-      try {
-        const metaRes = await fetch(`${V1_BASE}/items/${extensionId}?projection=PUBLISHED`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const metaText = await metaRes.text();
+      const parseBody = (raw: string): unknown => {
         try {
-          metaData = JSON.parse(metaText);
+          return JSON.parse(raw);
         } catch {
-          metaData = { raw: metaText };
+          return { raw };
         }
-      } catch (e) {
-        metaData = {
-          unavailable: `v1.1 metadata fetch failed (the v1.1 API is deprecated after ${V1_SUNSET}): ${errMsg(e)}`,
-        };
-      }
+      };
+
+      const statusData = parseBody(statusRes.body);
+      const metaData = metaRes.ok
+        ? parseBody(metaRes.body)
+        : {
+            unavailable: `v1.1 metadata fetch failed (the v1.1 API is deprecated after ${V1_SUNSET}): ${metaRes.body}`,
+          };
 
       const result = { extensionId, status: statusData, metadata: metaData };
       return {

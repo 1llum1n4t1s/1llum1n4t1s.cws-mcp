@@ -20,7 +20,7 @@
   "mcpServers": {
     "cws-mcp": {
       "command": "npx",
-      "args": ["-y", "cws-mcp"],
+      "args": ["-y", "@1llum1n4t1/cws-mcp"],
       "env": {
         "CWS_CLIENT_ID": "xxxxx.apps.googleusercontent.com",
         "CWS_CLIENT_SECRET": "GOCSPX-xxxxx",
@@ -35,9 +35,12 @@
 
 ## Environment Variables
 
-- CWS_CLIENT_ID (required): Google OAuth2 Client ID
-- CWS_CLIENT_SECRET (required): Google OAuth2 Client Secret
-- CWS_REFRESH_TOKEN (required): OAuth2 Refresh Token
+Authentication: provide EITHER a service account (Auth A, recommended for CI/CD) OR the OAuth2 trio (Auth B). The server prefers the service account when both are present.
+
+- CWS_SERVICE_ACCOUNT_KEY (Auth A): Service account JSON key — a file path or the raw JSON
+- CWS_CLIENT_ID (Auth B): Google OAuth2 Client ID
+- CWS_CLIENT_SECRET (Auth B): Google OAuth2 Client Secret
+- CWS_REFRESH_TOKEN (Auth B): OAuth2 Refresh Token
 - CWS_PUBLISHER_ID (optional): Publisher ID, defaults to "me"
 - CWS_ITEM_ID (optional): Default extension item ID
 

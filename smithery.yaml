@@ -4,11 +4,13 @@ startCommand:
   type: stdio
   configSchema:
     type: object
-    required:
-      - cwsClientId
-      - cwsClientSecret
-      - cwsRefreshToken
+    description: >-
+      Provide EITHER a service account (cwsServiceAccountKey, recommended for
+      CI/CD) OR the OAuth2 trio (cwsClientId + cwsClientSecret + cwsRefreshToken).
     properties:
+      cwsServiceAccountKey:
+        type: string
+        description: Service account JSON key (raw JSON or a file path). Preferred when set.
       cwsClientId:
         type: string
         description: Google OAuth2 Client ID for Chrome Web Store API
@@ -26,4 +28,4 @@ startCommand:
         description: Default extension item ID
   commandFunction:
     |-
-    config => ({ command: 'npx', args: ['-y', 'cws-mcp'], env: { CWS_CLIENT_ID: config.cwsClientId, CWS_CLIENT_SECRET: config.cwsClientSecret, CWS_REFRESH_TOKEN: config.cwsRefreshToken, CWS_PUBLISHER_ID: config.cwsPublisherId || 'me', CWS_ITEM_ID: config.cwsItemId || '' } })
+    config => ({ command: 'npx', args: ['-y', '@1llum1n4t1/cws-mcp'], env: { CWS_SERVICE_ACCOUNT_KEY: config.cwsServiceAccountKey || '', CWS_CLIENT_ID: config.cwsClientId || '', CWS_CLIENT_SECRET: config.cwsClientSecret || '', CWS_REFRESH_TOKEN: config.cwsRefreshToken || '', CWS_PUBLISHER_ID: config.cwsPublisherId || 'me', CWS_ITEM_ID: config.cwsItemId || '' } })
