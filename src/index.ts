@@ -196,6 +196,80 @@ type ToolResult = {
   isError: boolean;
 };
 
+/**
+ * 既知の Chrome Web Store エラーを「次に何をすればよいか」が分かる助言に翻訳する。
+ * 該当しなければ null を返す（呼び出し側は生エラーのみを見せる）。
+ */
+function interpretCwsError(status: number, body: string): string | null {
+  const b = body.toLowerCase();
+
+  // itemId が空・不正・未作成（今回の ReplaceTranslator 404 ブロッカーの正体）。
+  if (b.includes("could not find handler")) {
+    return (
+      "Hint: the item ID looks empty or malformed (the request URL had no valid item ID). " +
+      "For a brand-new extension, create the item first with the 'create-item-ui' tool (or the Developer Dashboard), " +
+      "then set CWS_ITEM_ID / pass itemId."
+    );
+  }
+  // publisher が見つからない（generic 404 より先に判定）。
+  if (b.includes("publisher") && (b.includes("not found") || b.includes("no publisher"))) {
+    return "Hint: publisher not found. Check CWS_PUBLISHER_ID (or pass publisherId). 'me' targets the authenticated publisher.";
+  }
+  // 認証・権限。
+  if (
+    status === 401 ||
+    status === 403 ||
+    b.includes("invalid_grant") ||
+    b.includes("unauthorized") ||
+    b.includes("invalid credentials") ||
+    b.includes("insufficient permission")
+  ) {
+    return (
+      "Hint: authentication/authorization failed. Check CWS_SERVICE_ACCOUNT_KEY (service account) " +
+      "or CWS_CLIENT_ID / CWS_CLIENT_SECRET / CWS_REFRESH_TOKEN, confirm the account owns this item/publisher, " +
+      "and that the OAuth scope includes chromewebstore."
+    );
+  }
+  // 審査中で更新不可。
+  if (
+    b.includes("in review") ||
+    b.includes("pending review") ||
+    b.includes("being reviewed") ||
+    b.includes("not updatable") ||
+    b.includes("item_not_updatable") ||
+    b.includes("review in progress")
+  ) {
+    return (
+      "Hint: the item is currently in review and cannot be updated. " +
+      "Wait for the review to finish, or cancel the pending submission with the 'cancel' tool, then re-upload."
+    );
+  }
+  // version 重複。
+  if (
+    b.includes("version already exists") ||
+    b.includes("already been uploaded") ||
+    b.includes("duplicate version") ||
+    (b.includes("version") && b.includes("conflict"))
+  ) {
+    return (
+      "Hint: this version already exists on the store. " +
+      "Bump the 'version' field in the extension's manifest.json, rebuild the ZIP, and retry."
+    );
+  }
+  // レート制限 / quota。
+  if (status === 429 || b.includes("quota") || b.includes("rate limit") || b.includes("too many requests")) {
+    return "Hint: rate limit / quota exceeded. Wait a bit and retry.";
+  }
+  // 上記に当てはまらない 404 / not found は item 不在として案内。
+  if (status === 404 || b.includes("not found")) {
+    return (
+      "Hint: the item ID does not exist or you lack access to it. " +
+      "Double-check the 32-char item ID (CWS_ITEM_ID / itemId); for a new extension create it first with 'create-item-ui'."
+    );
+  }
+  return null;
+}
+
 /** Format an API response with structured error info when applicable. */
 function formatResponse(result: { ok: boolean; status: number; body: string }): ToolResult {
   if (result.ok) {
@@ -213,8 +287,11 @@ function formatResponse(result: { ok: boolean; status: number; body: string }): 
     // Keep raw body
   }
 
+  const hint = interpretCwsError(result.status, result.body);
+  const text = `API Error (${result.status}): ${errorDetail}` + (hint ? `\n\n${hint}` : "");
+
   return {
-    content: [{ type: "text", text: `API Error (${result.status}): ${errorDetail}` }],
+    content: [{ type: "text", text }],
     isError: true,
   };
 }
@@ -328,6 +405,113 @@ async function clickSaveButton(page: Page) {
   }
 }
 
+/** Chrome Web Store の item ID は a–p の 32 文字。ダッシュボード URL から 1 つ抜き出す。 */
+function extractItemIdFromUrl(url: string): string | null {
+  // ダッシュボード/アイテム URL のパスに現れる ID を優先（/dashboard/<id>/edit, /items/<id>, /detail/<id> 等）。
+  const path = url.match(/\/(?:dashboard|items|detail)\/([a-p]{32})(?![a-p])/);
+  if (path) return path[1];
+  // フォールバック: 前後を [a-p] で囲まれていない 32 文字 [a-p] 列。
+  const generic = url.match(/(?<![a-p])([a-p]{32})(?![a-p])/);
+  return generic ? generic[1] : null;
+}
+
+/** developer console の「新しいアイテムを追加 / Add new item」ボタンを押す。押せたら true。 */
+async function clickAddNewItemButton(page: Page): Promise<boolean> {
+  const candidates = [
+    page
+      .getByRole("button", {
+        name: /new item|add new item|add item|새 항목|항목 추가|新しいアイテム|アイテムを追加|新しい項目/i,
+      })
+      .first(),
+    page.getByRole("link", { name: /new item|add new item|새 항목|新しいアイテム/i }).first(),
+    page.locator("button:has-text('New item')").first(),
+    page.locator("button:has-text('新しいアイテム')").first(),
+    page.locator("button:has-text('アイテムを追加')").first(),
+  ];
+  for (const btn of candidates) {
+    if ((await btn.count()) > 0) {
+      await btn.click();
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * v2 fetchStatus の JSON から人間向けの短いサマリを作る。
+ * V2 のフィールド名に幅があるため防御的に拾い、拒否理由・違反・警告も再帰収集する。
+ * 解釈不能なら null。
+ */
+function summarizeStatus(raw: string): string | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object") return null;
+  const obj = data as Record<string, unknown>;
+
+  const pick = (...keys: string[]): string | undefined => {
+    for (const k of keys) {
+      const v = obj[k];
+      if (typeof v === "string" && v) return v;
+      if (typeof v === "number") return String(v);
+    }
+    return undefined;
+  };
+
+  const lines: string[] = [];
+  const state = pick("status", "state", "reviewStatus", "itemStatus");
+  if (state) lines.push(`State: ${state}`);
+  const version = pick("crxVersion", "version", "publishedVersion");
+  if (version) lines.push(`Version: ${version}`);
+  const deploy = pick("deployPercentage", "publishedDeployPercentage");
+  if (deploy !== undefined) lines.push(`Deploy: ${deploy}%`);
+
+  // 拒否理由・違反・警告・詳細メッセージを再帰的に集める。
+  const reasons: string[] = [];
+  const collect = (node: unknown, depth: number): void => {
+    if (depth > 6 || node == null) return;
+    if (Array.isArray(node)) {
+      for (const x of node) collect(x, depth + 1);
+      return;
+    }
+    if (typeof node === "object") {
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        const lk = k.toLowerCase();
+        const looksLikeIssue =
+          lk.includes("reason") ||
+          lk.includes("violation") ||
+          lk.includes("rejection") ||
+          lk.includes("warning") ||
+          lk.includes("detail") ||
+          lk.includes("message");
+        if (looksLikeIssue && typeof v === "string" && v.trim()) {
+          reasons.push(`${k}: ${v.trim()}`);
+        } else if (looksLikeIssue && Array.isArray(v)) {
+          for (const item of v) {
+            if (typeof item === "string" && item.trim()) reasons.push(`${k}: ${item.trim()}`);
+            else collect(item, depth + 1);
+          }
+        } else {
+          collect(v, depth + 1);
+        }
+      }
+    }
+  };
+  collect(obj, 0);
+
+  const uniqReasons = [...new Set(reasons)];
+  if (uniqReasons.length > 0) {
+    lines.push("Issues:");
+    for (const r of uniqReasons.slice(0, 20)) lines.push(`  - ${r}`);
+  }
+
+  if (lines.length === 0) return null;
+  return ["── Summary ──", ...lines].join("\n");
+}
+
 // ── Shared tool schemas (single source of truth for main server + sandbox) ──
 
 const itemIdSchema = z
@@ -428,6 +612,50 @@ const schemas = {
       .describe("Google account index in dashboard URL (default: 0)"),
     headless: z.boolean().optional().describe("Run browser headless (default: false)"),
   },
+  submit: {
+    zipPath: z.string().describe("Absolute path to the ZIP file to upload and submit"),
+    itemId: itemIdSchema,
+    publisherId: publisherIdSchema,
+    publishType: z
+      .enum(["DEFAULT_PUBLISH", "STAGED_PUBLISH"])
+      .optional()
+      .describe(
+        "DEFAULT_PUBLISH (default): publish immediately after approval. STAGED_PUBLISH: stage for manual publishing.",
+      ),
+    deployPercentage: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .optional()
+      .describe("Initial deploy percentage for staged rollout (0-100)."),
+    skipReview: z
+      .boolean()
+      .optional()
+      .describe("Attempt to skip review if the extension qualifies. Defaults to false."),
+    blockOnWarnings: z
+      .boolean()
+      .optional()
+      .describe("If true, block the publish when the submission has warnings. Defaults to false."),
+    preflight: z
+      .boolean()
+      .optional()
+      .describe("Verify the item exists before uploading (default: true). Set false to skip the pre-check."),
+  },
+  "create-item-ui": {
+    zipPath: z.string().describe("Absolute path to the extension ZIP to create the new item from"),
+    accountIndex: z
+      .number()
+      .int()
+      .min(0)
+      .max(9)
+      .optional()
+      .describe("Google account index in dashboard URL (default: 0)"),
+    headless: z
+      .boolean()
+      .optional()
+      .describe("Run browser headless (default: false; use false on the first run to sign in)"),
+  },
 } as const;
 
 const descriptions: Record<keyof typeof schemas, string> = {
@@ -447,6 +675,10 @@ const descriptions: Record<keyof typeof schemas, string> = {
     `Update the store listing metadata of a Chrome Web Store item (v1.1 API). Supports common fields and a raw metadata payload. Note: the v1.1 API is deprecated and will be removed after ${V1_SUNSET}. Use 'update-metadata-ui' as the long-term alternative.`,
   "update-metadata-ui":
     "Update listing metadata via Chrome Web Store dashboard UI automation (Playwright). Use this when API metadata updates are not reflected, or as the primary metadata update method since the v1.1 API is deprecated.",
+  submit:
+    "One-shot submission: (optional preflight existence check) → upload the ZIP → verify the upload succeeded → publish for review → return the final status with a readable summary. Combines upload + publish + status and surfaces actionable errors at each step.",
+  "create-item-ui":
+    "Create a brand-new Chrome Web Store item via dashboard UI automation (Playwright) and return its new 32-char item ID. The v2 API cannot create items, so this drives the Developer Dashboard 'Add new item' → upload-ZIP flow. Use headless=false on the first run to sign in (the profile is reused afterward).",
 };
 
 // ── MCP Server ──
@@ -524,7 +756,12 @@ server.registerTool(
       const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`;
       const result = await apiCall(url, { method: "GET" });
 
-      return formatResponse(result);
+      const formatted = formatResponse(result);
+      if (result.ok) {
+        const summary = summarizeStatus(result.body);
+        if (summary) return appendNote(formatted, summary);
+      }
+      return formatted;
     } catch (e) {
       return toolError(e);
     }
@@ -713,6 +950,244 @@ server.registerTool(
   },
 );
 
+// ── submit (one-shot: preflight → upload → publish → status) ──
+server.registerTool(
+  "submit",
+  { description: descriptions.submit, inputSchema: schemas.submit },
+  async ({ zipPath, itemId, publisherId, publishType, deployPercentage, skipReview, blockOnWarnings, preflight }) => {
+    try {
+      const id = resolveItemId(itemId);
+      const pub = resolvePublisherId(publisherId);
+      const steps: { step: string; ok: boolean; detail?: string }[] = [];
+
+      // ZIP を先に読む（パス不正ならここで分かりやすく失敗）。
+      let zipData: Buffer;
+      try {
+        zipData = readFileSync(zipPath);
+      } catch (e) {
+        return toolError(new Error(`Cannot read ZIP at '${zipPath}': ${errMsg(e)}`));
+      }
+
+      // 1) Preflight: アイテム存在確認（アップロード前に 404 を検出する）。
+      if (preflight !== false) {
+        const pre = await apiCall(`${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`, {
+          method: "GET",
+        });
+        const preMissing =
+          !pre.ok && (pre.status === 404 || pre.body.toLowerCase().includes("could not find handler"));
+        if (preMissing) {
+          const hint = interpretCwsError(pre.status, pre.body);
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `Preflight failed: item '${id}' was not found (HTTP ${pre.status}).` +
+                  (hint ? `\n\n${hint}` : ""),
+              },
+            ],
+            isError: true,
+          };
+        }
+        steps.push({ step: "preflight", ok: pre.ok, detail: pre.ok ? "item exists" : `status ${pre.status} (proceeding)` });
+      }
+
+      // 2) Upload
+      const uploadRes = await apiCall(`${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/zip" },
+        body: new Uint8Array(zipData),
+      });
+      let uploadState: string | undefined;
+      let uploadItemError: unknown;
+      try {
+        const j = JSON.parse(uploadRes.body) as Record<string, unknown>;
+        uploadState = typeof j.uploadState === "string" ? j.uploadState : undefined;
+        uploadItemError = j.itemError;
+      } catch {
+        // non-JSON body — leave undefined
+      }
+      // upload は HTTP 200 でも uploadState=FAILURE / itemError で失敗していることがある。
+      // 一方 IN_PROGRESS / PROCESSING など SUCCESS 以外でも失敗とは限らないので、
+      // 明確な FAILURE か itemError のときだけ失敗扱いにする（誤って中断しない）。
+      const uploadFailed =
+        !uploadRes.ok ||
+        uploadState === "FAILURE" ||
+        (Array.isArray(uploadItemError) && uploadItemError.length > 0);
+      steps.push({
+        step: "upload",
+        ok: !uploadFailed,
+        detail: `HTTP ${uploadRes.status}${uploadState ? `, uploadState=${uploadState}` : ""}`,
+      });
+      if (uploadFailed) {
+        const hint = interpretCwsError(uploadRes.status, uploadRes.body);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Upload failed (HTTP ${uploadRes.status}${uploadState ? `, uploadState=${uploadState}` : ""}): ${uploadRes.body}` +
+                (hint ? `\n\n${hint}` : ""),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // 3) Publish
+      const publishBody: Record<string, unknown> = {};
+      if (publishType) publishBody.publishType = publishType;
+      if (deployPercentage !== undefined) publishBody.deployInfos = [{ deployPercentage }];
+      if (skipReview !== undefined) publishBody.skipReview = skipReview;
+      if (blockOnWarnings !== undefined) publishBody.blockOnWarnings = blockOnWarnings;
+      const hasBody = Object.keys(publishBody).length > 0;
+      const publishRes = await apiCall(`${API_BASE}/v2/publishers/${pub}/items/${id}:publish`, {
+        method: "POST",
+        ...(hasBody
+          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(publishBody) }
+          : {}),
+      });
+      steps.push({ step: "publish", ok: publishRes.ok, detail: `HTTP ${publishRes.status}` });
+      if (!publishRes.ok) {
+        const hint = interpretCwsError(publishRes.status, publishRes.body);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Upload succeeded, but publish failed (HTTP ${publishRes.status}): ${publishRes.body}` +
+                (hint ? `\n\n${hint}` : ""),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // 4) Final status
+      const statusRes = await apiCall(`${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`, {
+        method: "GET",
+      });
+      steps.push({ step: "status", ok: statusRes.ok, detail: `HTTP ${statusRes.status}` });
+      const summary = statusRes.ok ? summarizeStatus(statusRes.body) : null;
+
+      const out = [
+        `✅ Submitted '${id}' for review.`,
+        "",
+        "Steps:",
+        ...steps.map((s) => `  ${s.ok ? "✓" : "✗"} ${s.step}${s.detail ? ` — ${s.detail}` : ""}`),
+      ];
+      if (summary) out.push("", summary);
+      out.push("", "Publish response:", publishRes.body);
+      return { content: [{ type: "text", text: out.join("\n") }], isError: false };
+    } catch (e) {
+      return toolError(e);
+    }
+  },
+);
+
+// ── create-item-ui (dashboard automation: create a brand-new item) ──
+server.registerTool(
+  "create-item-ui",
+  { description: descriptions["create-item-ui"], inputSchema: schemas["create-item-ui"] },
+  async ({ zipPath, accountIndex, headless }) => {
+    try {
+      const zip = resolve(zipPath);
+      readFileSync(zip); // 存在確認（読めなければ throw）
+      const idx = accountIndex ?? 0;
+      const consoleUrl = `https://chromewebstore.google.com/u/${idx}/devconsole`;
+
+      const context = await chromium.launchPersistentContext(DASHBOARD_PROFILE_DIR, {
+        channel: "chrome",
+        headless: headless ?? false,
+      });
+
+      try {
+        const page = context.pages()[0] || (await context.newPage());
+        await page.goto(consoleUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
+        await page.waitForTimeout(2500);
+
+        if (page.url().includes("accounts.google.com")) {
+          throw new Error(
+            `Not signed in to the Chrome Web Store developer console. Run once with headless=false and sign in. Profile dir: ${DASHBOARD_PROFILE_DIR}`,
+          );
+        }
+
+        // クリックで file chooser を出す UI と、hidden <input type=file> を出す UI の
+        // 両方に対応するため、両方の経路を click 前から待ち受けて先に現れた方で ZIP を渡す。
+        // どちらも同じ timeout を張るので、実際に現れた経路が先に解決し、
+        // 何も起きないときだけ両方 null になって明示エラーになる（無音ハングを防ぐ）。
+        const fileChooserPromise = page
+          .waitForEvent("filechooser", { timeout: 30_000 })
+          .then((fc) => ({ kind: "chooser" as const, fc }))
+          .catch(() => null);
+        const fileInputPromise = page
+          .locator("input[type='file']")
+          .first()
+          .waitFor({ state: "attached", timeout: 30_000 })
+          .then(() => ({ kind: "input" as const }))
+          .catch(() => null);
+
+        const clicked = await clickAddNewItemButton(page);
+        if (!clicked) {
+          throw new Error(
+            "Could not find an 'Add new item / New item' button on the developer console. The dashboard UI may have changed.",
+          );
+        }
+
+        const target = await Promise.race([fileChooserPromise, fileInputPromise]);
+        if (target?.kind === "chooser") {
+          await target.fc.setFiles(zip);
+        } else if (target?.kind === "input") {
+          await page.locator("input[type='file']").first().setInputFiles(zip);
+        } else {
+          throw new Error(
+            "Clicked 'Add new item' but no file chooser or file input appeared within 30s. The dashboard UI may have changed.",
+          );
+        }
+
+        // アップロード完了 → 新規アイテムの編集画面へ遷移して URL に itemId が現れるのを待つ。
+        let newItemId: string | null = null;
+        const deadline = Date.now() + 120_000;
+        while (Date.now() < deadline) {
+          newItemId = extractItemIdFromUrl(page.url());
+          if (newItemId) break;
+          await page.waitForTimeout(2000);
+        }
+
+        if (!newItemId) {
+          throw new Error(
+            `Uploaded the ZIP but could not detect the new item ID from the URL (${page.url()}). ` +
+              "Open the developer console to confirm the item was created and copy its ID.",
+          );
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  ok: true,
+                  itemId: newItemId,
+                  url: page.url(),
+                  next: `Set CWS_ITEM_ID=${newItemId} (or pass itemId), then 'update-metadata-ui' for the listing and 'submit' to publish.`,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+          isError: false,
+        };
+      } finally {
+        await context.close();
+      }
+    } catch (e) {
+      return toolError(e);
+    }
+  },
+);
+
 // ── Resources ──
 
 server.registerResource(
@@ -800,7 +1275,7 @@ server.registerPrompt(
 Extension ID: ${extensionId}
 ZIP file: ${zipPath}${version ? `\nNew version: ${version}` : ""}
 
-Follow these steps using the available cws-mcp tools:
+Tip: for a one-shot flow, the \`submit\` tool runs preflight → upload → publish → status in a single call. For a brand-new extension that has no item ID yet, use \`create-item-ui\` first to create the item and obtain its ID. The step-by-step flow below is the manual equivalent:
 
 1. **Upload the ZIP** — Use the \`upload\` tool with zipPath="${zipPath}" and itemId="${extensionId}" to upload the new build as a draft.
 2. **Verify upload** — Use the \`status\` tool to confirm the upload succeeded and the item is in DRAFT state.
