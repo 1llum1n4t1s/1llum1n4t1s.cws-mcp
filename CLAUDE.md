@@ -45,11 +45,11 @@ Everything lives in a single file: **`src/index.ts`** (~1000 lines). The logical
 
 - **The CWS API cannot create items**, and there is **no "list all items" endpoint** — every operation targets a single `itemId`. The `extension-status` resource intentionally has `list: undefined` for this reason.
 - **`itemId` / `publisherId` are URL path segments.** `resolveItemId` / `resolvePublisherId` `encodeURIComponent` them; keep new URL building going through `itemUrl()` so this safety holds.
-- **Version is duplicated across files and must stay in sync**: `package.json` `version`, and `server.json` (two `version` fields). The publish workflow fails if the git tag (`v*`) doesn't match `package.json`. Bump versions only on explicit request (use the user's `/vava` flow); do not bump as a side effect of other edits.
+- **Version is duplicated across files and must stay in sync**: `package.json` `version`, and `server.json` (two `version` fields). The publish workflow fails if the `release/x.y.z` branch name doesn't match `package.json`. Bump versions only on explicit request (use the user's `/vava` flow); do not bump as a side effect of other edits.
 - **Adding a tool** = add to `schemas` + `descriptions` + a `registerTool(...)` call. Because the sandbox auto-registers from `schemas` while the main server registers tools individually, keep the `schemas` keys and the main-server registrations in sync.
 - **`templates/CLAUDE.md` and `templates/AGENTS.md` are NOT instructions for this repo** — they are consumer-facing templates shipped to *users'* extension projects to teach their agent how to drive the `mcp__cws-mcp__*` tools. Edit them only to reflect changes in the tool surface.
 
 ## Distribution
 
-- **npm** via GitHub Actions Trusted Publishing (OIDC, no token) in `.github/workflows/npm-publish.yml`, triggered by pushing a `v*` tag.
+- **npm** via GitHub Actions Trusted Publishing (OIDC, no token) in `.github/workflows/npm-publish.yml`, triggered by pushing a `release/**` branch (matches the convention used across the user's other projects).
 - **Docker** (`Dockerfile`, multi-stage, `node:22-alpine`), **Smithery** (`smithery.yaml`), and the **MCP Registry** (`server.json`). `llms.txt` is the machine-readable summary. When the tool surface or auth options change, update README.md, README.ko.md, llms.txt, smithery.yaml, and server.json together.

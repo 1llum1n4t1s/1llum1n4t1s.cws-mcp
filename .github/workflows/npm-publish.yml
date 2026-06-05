@@ -4,12 +4,12 @@ name: Publish to npm
 # 事前に npmjs.com のパッケージ設定で Trusted Publisher を登録すること:
 #   Publisher = GitHub Actions / Org or user = 1llum1n4t1s
 #   Repository = 1llum1n4t1s.cws-mcp / Workflow = npm-publish.yml
-# 発火: バージョンタグ (v1.4.3 等) の push、または手動実行。
+# 発火: release/x.y.z ブランチの push、または手動実行。
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - "release/**"
   workflow_dispatch:
 
 permissions:
@@ -33,18 +33,18 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
 
-      # タグ (v1.4.3 等) と package.json の version が一致するか検証。
-      # bump 忘れ・誤タグによる二重 publish / 誤バージョン公開を発火前に止める。
-      - name: Verify tag matches package.json version
-        if: github.ref_type == 'tag'
+      # release/x.y.z ブランチ名と package.json の version が一致するか検証。
+      # bump 忘れ・誤ブランチによる二重 publish / 誤バージョン公開を発火前に止める。
+      - name: Verify release branch matches package.json version
+        if: startsWith(github.ref_name, 'release/')
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          BR="${GITHUB_REF_NAME#release/}"
           PKG=$(node -p "require('./package.json').version")
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::Tag '$TAG' does not match package.json version '$PKG'"
+          if [ "$BR" != "$PKG" ]; then
+            echo "::error::Release branch '$BR' does not match package.json version '$PKG'"
             exit 1
           fi
-          echo "Tag and package.json agree on $PKG"
+          echo "Release branch and package.json agree on $PKG"
 
       # Trusted Publishing は npm >= 11.5.1 が必要 (Node 22 同梱版より新しい)
       - name: Ensure recent npm
