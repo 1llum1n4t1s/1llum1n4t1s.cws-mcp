@@ -15,7 +15,7 @@ Use this MCP when you need to:
 - **"Upload a new version of my Chrome extension"** — build your ZIP and use the `upload` tool to push it as a draft
 - **"Publish my extension to the Chrome Web Store"** — use `publish` to submit for review and go live
 - **"Check the review status of my extension"** — use `status` to see review state, version, and deploy percentage
-- **"Update my extension's metadata (description, screenshots)"** — use `update-metadata-ui` to change store listing details
+- **"Upload and publish in one step"** — use `submit` to run upload → publish → status as a single call
 - **"Cancel a pending submission"** — use `cancel` to withdraw a submission under review
 - **"Set up staged rollout for my extension"** — use `publish` with staged rollout, then `deploy-percentage` to ramp up
 
@@ -30,7 +30,9 @@ Use this MCP when you need to:
 | `deploy-percentage` | Set staged rollout percentage (0-100, must exceed current target) |
 | `get` | Read draft/published listing metadata (v1.1 API, deprecated Oct 2026) |
 | `update-metadata` | Update listing metadata via v1.1 API (deprecated Oct 2026) |
-| `update-metadata-ui` | Update listing metadata via dashboard UI automation (Playwright) |
+| `submit` | One-shot: run upload → publish → status in a single call (with existence preflight and readable errors) |
+
+> The Chrome Web Store API cannot create items. Create a new item manually in the Chrome Web Store Developer Dashboard, then use `upload` / `publish` (or `submit`) against its item ID.
 
 ## API Coverage
 
@@ -44,7 +46,7 @@ This MCP server covers **all Chrome Web Store API v2 endpoints**:
 | `publishers.items.cancelSubmission` | `cancel` |
 | `publishers.items.setPublishedDeployPercentage` | `deploy-percentage` |
 
-Additionally, v1.1 API endpoints are available for metadata operations (`get`, `update-metadata`), with dashboard UI automation (`update-metadata-ui`) as the recommended alternative since v1 is deprecated.
+Additionally, v1.1 API endpoints are available for metadata operations (`get`, `update-metadata`). Since v1.1 is deprecated, listing changes after its removal must be made manually in the Chrome Web Store Developer Dashboard (the v2 API has no metadata write endpoint, and this MCP does not automate the browser).
 
 ## Setup
 
@@ -137,7 +139,6 @@ Provide **either** a service-account key (Auth A) **or** the OAuth2 refresh-toke
 | `CWS_REFRESH_TOKEN` | Auth B | OAuth2 Refresh Token |
 | `CWS_PUBLISHER_ID` | No | Publisher ID (default: `me`) |
 | `CWS_ITEM_ID` | No | Default extension item ID |
-| `CWS_DASHBOARD_PROFILE_DIR` | No | Browser profile path for `update-metadata-ui` (default: `~/.cws-mcp-profile`) |
 
 ## Usage Examples
 
@@ -182,22 +183,6 @@ Use cws-mcp update-metadata with metadata={
 }
 ```
 
-### When API metadata updates don't reflect
-```
-Use cws-mcp update-metadata-ui with:
-- title
-- summary
-- description
-- category
-- homepageUrl
-- supportUrl
-```
-
-Notes:
-- This tool automates the Chrome Web Store dashboard UI.
-- First run with `headless=false` if login is required.
-- Browser profile path defaults to `~/.cws-mcp-profile` (override with `CWS_DASHBOARD_PROFILE_DIR`).
-
 ### Staged rollout
 ```
 1. Use cws-mcp publish
@@ -210,7 +195,7 @@ Note: `deploy-percentage` is only available for extensions with 10,000+ seven-da
 
 ## V1 API Deprecation
 
-The `get` and `update-metadata` tools use the Chrome Web Store v1.1 API, which is **deprecated and will be removed after October 15, 2026**. The v2 API does not provide metadata read/write endpoints, so these tools remain available as a bridge. Use `update-metadata-ui` (Playwright dashboard automation) as the long-term alternative.
+The `get` and `update-metadata` tools use the Chrome Web Store v1.1 API, which is **deprecated and will be removed after October 15, 2026**. The v2 API does not provide metadata read/write endpoints, so these tools remain available as a bridge. After v1.1 is removed, make listing changes manually in the Chrome Web Store Developer Dashboard — the v2 API has no metadata write endpoint, and this MCP does not automate the browser.
 
 ## License
 

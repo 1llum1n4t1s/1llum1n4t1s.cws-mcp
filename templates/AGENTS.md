@@ -13,7 +13,7 @@ Use `mcp__cws-mcp__<tool>` for all Chrome Web Store operations:
 - `deploy-percentage` — Set staged rollout percentage (0-100, must exceed current)
 - `get` — Read draft/published listing metadata (v1.1 API)
 - `update-metadata` — Update listing metadata via v1.1 API
-- `update-metadata-ui` — Update listing metadata via dashboard UI automation (Playwright)
+- `submit` — One-shot: run `upload` -> `publish` -> `status` in a single call (with existence-check preflight and readable errors)
 
 ## Common Workflows
 
@@ -29,13 +29,20 @@ Use `mcp__cws-mcp__<tool>` for all Chrome Web Store operations:
 3. Increase with `deploy-percentage` (10 -> 50 -> 100)
 
 ### Update store listing
-1. Use `update-metadata-ui` (preferred) or `update-metadata` for title, description, category
+1. Use `update-metadata` for title, description, category (v1.1 API)
 2. Call `publish` if changes need to go live
+
+Note: The v1.1 API is deprecated and shuts down on 2026-10-15. After that, edit
+listing metadata manually in the Chrome Web Store Developer Dashboard — the v2 API
+has no metadata-write endpoint, and this MCP does not automate the browser.
+
+### Create a new item
+The Chrome Web Store API cannot create items. Create a new item manually in the
+Chrome Web Store Developer Dashboard, then use `upload`/`publish` to manage it.
 
 ## Rules
 
 - Always check `status` before `publish` to verify current state
 - `deploy-percentage` only works for extensions with 10,000+ weekly active users
 - Rollout percentage can only increase, never decrease
-- `update-metadata-ui` requires headless=false on first run for Google login
-- v1.1 API tools (`get`, `update-metadata`) are deprecated after October 2026
+- v1.1 API tools (`get`, `update-metadata`) are deprecated and shut down on 2026-10-15

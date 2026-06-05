@@ -11,7 +11,7 @@
 - deploy-percentage: Set staged rollout percentage (0-100, must exceed current target)
 - get: Read draft/published listing metadata (v1.1 API, deprecated Oct 2026)
 - update-metadata: Update listing metadata via v1.1 API (deprecated Oct 2026)
-- update-metadata-ui: Update listing metadata via dashboard UI automation (Playwright)
+- submit: One-shot upload → publish → status in a single call (with existence-check preflight and readable errors)
 
 ## Install
 
@@ -40,15 +40,14 @@
 - CWS_REFRESH_TOKEN (required): OAuth2 Refresh Token
 - CWS_PUBLISHER_ID (optional): Publisher ID, defaults to "me"
 - CWS_ITEM_ID (optional): Default extension item ID
-- CWS_DASHBOARD_PROFILE_DIR (optional): Browser profile path for UI automation, defaults to ~/.cws-mcp-profile
 
 ## API Coverage
 
-Covers all Chrome Web Store API v2 endpoints: media.upload, publishers.items.publish, publishers.items.fetchStatus, publishers.items.cancelSubmission, publishers.items.setPublishedDeployPercentage. Also includes v1.1 metadata read/write (deprecated Oct 2026) and Playwright-based dashboard automation.
+Covers all Chrome Web Store API v2 endpoints: media.upload, publishers.items.publish, publishers.items.fetchStatus, publishers.items.cancelSubmission, publishers.items.setPublishedDeployPercentage. Also includes v1.1 metadata read/write (deprecated Oct 2026). This server is API only and does not automate the browser.
 
 ## Notes
 
 - deploy-percentage only works for extensions with 10,000+ seven-day active users
 - Rollout percentage must always increase (never decrease)
-- update-metadata-ui requires first run with headless=false for login
-- v1.1 API (get, update-metadata) deprecated after October 15, 2026; prefer update-metadata-ui
+- v1.1 API (get, update-metadata) deprecated after October 15, 2026; once removed, make listing changes manually in the Chrome Web Store Developer Dashboard (the v2 API has no metadata write endpoint, and this MCP does not automate the browser)
+- The Chrome Web Store API cannot create items; create new items manually in the Developer Dashboard
